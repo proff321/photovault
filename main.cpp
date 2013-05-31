@@ -1,248 +1,109 @@
 
 #include <iostream>
-#include <exiv2/exiv2.hpp>
-#include <boost/filesystem.hpp>
-#include <boost/foreach.hpp>
-#include <boost/date_time/local_time/local_time.hpp>
 
-#include <iomanip>
-#include <cassert>
+// File system manipulation library
+#include <boost/filesystem.hpp>
+
+// Used to itterate over directories
+#include <boost/foreach.hpp>
+
+// Moves images to folders based on date
+#include "picSorter.h"
+
+// Program options manager
+#include <boost/program_options.hpp>
+
+
+// Shorten namespace to 'po' (Program Options)
+namespace po = boost::program_options;
 
 using namespace std;
-using namespace boost::filesystem;
-
-// Declerations
-bool verifyWorkingDirectory(path);
-bool verifyMasterDirectory();
-bool copyImages(path, path);
-string getImageInformation(path);
-bool moveImage(path, path, string);
-void checkOrMake(path);
 
 int main(int argc, char* argv[]){
 
 	cout << "Staring PicServe!" << '\n';
 
-	// Directory information
-	path workingDirec ("/tmp/PicServe/UploadedImages");
-	path imageDirec ("/srv/samba/picShare");
-	
-	// Run through a couple of checks and then the main loop
-	if(verifyMasterDirectory())
-	{
+	// Define configuration options
+	po::options_description desc("Allowed options");
+    desc.add_options()
+            ("workingDir", po::value<string>(), "Absolute path to the working directory for the PhotoVault application.")
+            ("dumpDir", po::value<string>(), "Absolute path to the directory where images are being dumped and awaiting processing.")
+            ("archiveDir", po::value<string>(), "Absolute path to the directory where images are archived once processed.")
+            ("errorDir", po::value<string>(), "Absolute path to the directory where images that could not be processed are stored.")
+            ("help", "Shows general help output.")
+        ;
 
-		if(verifyWorkingDirectory(workingDirec))
-		{
-			//cout << "It Worked!!!" << '\n';
-			copyImages(imageDirec, workingDirec);
-		}
+    // Create a variable to hold the confiration options
+	po::variables_map vm;        
+
+	// Get the configuration options from the command line
+    po::store(po::parse_command_line(argc, argv, desc), vm);
+    po::notify(vm);    
+
+    // Check to see if the user is requesting help.  If so, output the generic boost defult help.
+    if (vm.count("help")) {
+        cout << desc << "\n";
+        return 0;
+    }
+
+    // Check to make sure the user has supplied mandatory parameters
+    if(!(vm.count("workingDir") && vm.count("dumpDir") & vm.count("archiveDir") & vm.count("errorDir"))){
+
+    	cout << "You must include parameters 'workingDir' 'dumpDir' 'archiveDir' and 'errorDir' in order for the program to run";
+    	return 0;
+    }
+
+	// Loop through the files in the dump directory and check to see if it is a supported format.
+	// If the image is a supported format, move the current image to the working directory
 	
+	// Create the directory iterator
+	boost::filesystem::directory_iterator dit(vm["dumpDir"].as<string>()), eod;
+
+	// Use the boost 'for each' function to loop through the directory
+	BOOST_FOREACH(boost::filesystem::path const &currentFilePath, std::make_pair(dit, eod))
+	{
+		std::cout << "Working on file: " << currentFilePath.filename() << '\n';
+
+		std::cout << "Moving File:  " << currentFilePath.filename() << '\n';
+			
+		// The file is a supported format, so move it to the workign directory	
+
+		// Create a temporary path that points to the working directory.
+		// Create another temporary path that holds just the file name.
+		// Putting the two paths together crates a new location for the file currently
+		// being worked on.
+		boost::filesystem::path workingFilePath(vm["workingDir"].as<string>());
+		boost::filesystem::path fileName(currentFilePath.filename());
+		workingFilePath /= fileName;
+
+		// Copy the file to the working directory
+		// TODO:  Remove the overwrite feature once the files are getting properly processed
+		copy_file(currentFilePath, workingFilePath, boost::filesystem::copy_option::overwrite_if_exists);
+	
+		// Remove the file from the Photo Dump location
+		remove(currentFilePath);
+		
+		// Send the file to the photo sorter so it can copy the file to the appropriate location
+		// Pass the file's current location as well as the archive location and the error directory locations
+		PhotoVault::PicSorter pSorter(workingFilePath.native(), vm["archiveDir"].as<string>(), vm["errorDir"].as<string>());
+
+		// Tell photo sorter to sort the file 
+		pSorter.MoveImage();
+		// Get the image information
+		//string imageDate = getImageInformation(tempPath);
+
 	}
 
+
+	// Finish the application
 	return 0;
 
 }
 
 
-// Verifies that the working directory is availalbe and if not tries to create it.
-bool verifyWorkingDirectory(path workingDirec){
-	
-	if(!exists(workingDirec))
-	{
-		// Make the directory
-		if (create_directory(workingDirec))
-		{
-			cout << "Created working directory." << '\n';
-			return true;
-		}
-		else
-		{
-			cout << "ERROR:  Failed to create working directory." << '\n';
-			return false;
-		}
-	}
-	else
-	{
-		// Directory exists
-		return true;
-	}
-}
 
-// Verifies that there is a 'PicServe' foler in the /tmp 
-bool verifyMasterDirectory()
-{
-	// Master directory path
-	path masterDirec ("/tmp/PicServe");
-	
-	if(!exists(masterDirec))
-	{
-		// Make the directory
-		if (create_directory(masterDirec))
-		{
-			cout << "Created master directory." << '\n';
-			return true;
-		}
-		else
-		{
-			cout << "ERROR:  Failed to create master directory." << '\n';
-			return false;
-		}
-	}
-	else
-	{
-		// Directory exists
-		return true;
-	}
 
-}
 
-// Copies images from the shared Samba folder to the local working directory
-bool copyImages(path imageDirec, path workingDirec)
-{
-	// Create the directory iterator
-	directory_iterator dit(imageDirec), eod;
 
-	// Use the boost 'for each' function to loop through the directory
-	BOOST_FOREACH(path const &imagePath, std::make_pair(dit, eod))
-	{
-		std::cout << "Moving File:  " << imagePath << '\n';
 
-		// Append file name to working directory path
-		path tempPath(workingDirec);
-		path fileName(imagePath.filename());
-		tempPath /= fileName;
 
-		// Copy the file
-		copy_file(imagePath, tempPath, copy_option::overwrite_if_exists);
-	
-		// Remove the old file
-		remove(imagePath);
-		
-		// Get the image information
-		string imageDate = getImageInformation(tempPath);
-		
-		// Move the image 
-		if(!imageDate.empty() && imageDate != "ERROR")
-		{
-				cout << "Image Date:  " << imageDate << '\n';
-				
-				path archive ("/home/eric/Projects/PicServe/Archive");
-				
-				moveImage(tempPath, archive, imageDate);
-		}
-		else
-		{
-			// Move the image to the un-processable folder on the Samba share
-			
-			cout << "Moving image " << tempPath.native() << " to import error archive ";
-			
-			path archive ("/home/eric/Projects/PicServe/Archive");
-			
-			path errorArchive ("Import Errors");
-			
-			archive /= errorArchive;
-			
-			path errorPath(archive);
-			path fileName(tempPath.filename());
-			errorPath /= fileName;
-			
-			cout << errorPath.native() << '\n';
-			copy_file(tempPath, errorPath, copy_option::overwrite_if_exists);
-				
-			// Remove the working image file
-			remove(tempPath);
-			
-			
-		}
-	}
-
-}
-
-// Get's the image information
-string getImageInformation(path imageLocation)
-{
-	// Check and make sure that the image is of a supported type
-	try
-	{
-	
-		// Create a constant that refers to the image locations for the EXIV libarary
-		string const imageLocationString = imageLocation.native();
-		
-		// Open the image
-		Exiv2::Image::AutoPtr image = Exiv2::ImageFactory::open(imageLocationString);
-		
-		// Read exif data from image
-		image->readMetadata();
-		
-		// Get the exif data from the image
-		Exiv2::ExifData &exifData = image->exifData();
-		
-		// Return the date	
-		return exifData["Exif.Image.DateTime"].toString();
-		
-	}
-	catch (Exiv2::AnyError& e)
-	{
-			cout << "INFO:  File " << imageLocation.native() << " is not a supported type." << '\n';
-			cout << "Error:  " << e.what() << '\n';
-			
-			// Return an error
-			return "ERROR";
-			
-	}
-
-}
-
-bool moveImage(path imageDirec, path archiveDirec, string imageDate)
-{
-	
-	// Work through the date and get the year, month and day
-	string year =  imageDate.substr(0,4);
-	string month = imageDate.substr(5,2);
-	string day = imageDate.substr(8,2);
-	
-	cout << "Month:  " << month << " Day:  " << day << " Year:  " << year << '\n';
-	
-	path newImagePath ("");
-	
-	// Start at the archive base
-	newImagePath /= archiveDirec;
-	
-	// Append the year and check to see if it exists
-	path yearPath (year);
-	newImagePath /= yearPath;
-	checkOrMake(newImagePath);
-	
-	// Append the month and check to see if it exists
-	path monthPath (month);
-	newImagePath /= monthPath;
-	checkOrMake(newImagePath);
-	
-	// Append the day and check to see if it exists
-	path dayPath (day);
-	newImagePath /= dayPath;
-	checkOrMake(newImagePath);
-	
-	// Copy the image to the new location
-	
-	path tempPath(newImagePath);
-	path fileName(imageDirec.filename());
-	tempPath /= fileName;
-	copy_file(imageDirec, tempPath, copy_option::overwrite_if_exists);
-	
-	// Remove the working image file
-	remove(imageDirec);
-	
-	return true;
-}
-
-void checkOrMake(path directory)
-{
-	// Check and see if the directory exists and if it doesn't then make it
-	if(!exists(directory))
-	{
-		cout << "Creating directory: " << directory.native() << '\n';
-		
-		create_directory(directory);
-	}
-}
